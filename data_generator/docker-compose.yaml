@@ -1,0 +1,33 @@
+
+services:
+  postgres-server:
+    image: postgres:14.0
+    container_name: postgres-server
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: machinedb
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-U", "admin", "-d", "machinedb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    
+  data-generator:
+    platform: linux/amd64
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: data-generator
+    depends_on:
+      postgres-server:
+        condition: service_healthy
+    command: ["--db-host", "postgres-server"]
+    restart: always
+
+networks:
+  default:
+    name: mlops-network

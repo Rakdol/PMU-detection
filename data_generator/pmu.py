@@ -20,82 +20,84 @@ class VirtualPMU:
         # current = 0.95 + np.sin(2 * np.pi * 0.3 * t) * random.uniform(0.01, 0.015)
         # phase_angle = np.sin(2 * np.pi * 0.4 * t) + random.uniform(0.01, 0.015)
 
-        frequency = 60 + np.random.normal(0, 0.01, t.shape[0])
-        voltage = 1 + np.random.normal(0, 0.015, t.shape[0])
-        current = 0.95 + np.random.normal(0, 0.015, t.shape[0])
-        phase_angle = 0 + np.random.normal(0, 0.015, t.shape[0])
+        frequency = 60 + np.random.normal(0, 0.001, t.shape[0])
+        voltage = 1 + np.random.normal(0, 0.0015, t.shape[0])
+        current = 0.95 + np.random.normal(0, 0.0015, t.shape[0])
+        phase_angle = 0 + np.random.normal(0, 0.0015, t.shape[0])
 
         base_timestamp = datetime.now()
         timestamps = [base_timestamp + timedelta(seconds=i) for i in range(len(t))]
-
+        event_duration = 10
+        oscillation_duration = 20
         anomaly_log = []
         # Simulate specific complex anomalies:
         if random.random() < self.event_rate:
             # 1. Frequency Deviations
-            st = int(frequency.shape[0] * random.random())
-            frequency[st : st + 10] -= 0.2  # Frequency drops
+
+            st = int((frequency.shape[0] - event_duration) * random.random())
+            frequency[st : st + event_duration] -= 0.2  # Frequency drops
             for i in range(10):
                 anomaly_log.append((timestamps[st + i], "frequency", "drops"))
 
         if random.random() < self.event_rate:
             # 2. Frequency spike
-            st = int(frequency.shape[0] * random.random())
-            frequency[st : st + 10] += 0.2
-            for i in range(10):
+            st = int((frequency.shape[0] - event_duration) * random.random())
+            frequency[st : st + event_duration] += 0.2
+            for i in range(event_duration):
                 anomaly_log.append((timestamps[st + i], "frequency", "spike"))
 
         if random.random() < self.event_rate:
             # 3. Phase Angle Shift
-            st = int(frequency.shape[0] * random.random())
-            phase_angle[st : st + 10] += 0.3  # Phase angle shift
-            for i in range(10):
+            st = int((frequency.shape[0] - event_duration) * random.random())
+            phase_angle[st : st + event_duration] += 0.3  # Phase angle shift
+            for i in range(event_duration):
                 anomaly_log.append((timestamps[st + i], "phase_angle", "shift"))
 
         if random.random() < self.event_rate:
             # 4. Voltage Sag
-            st = int(frequency.shape[0] * random.random())
-            voltage[st : st + 10] -= 0.3  # Voltage sag
+            st = int((frequency.shape[0] - event_duration) * random.random())
+            voltage[st : st + event_duration] -= 0.3  # Voltage sag
 
-            for i in range(10):
+            for i in range(event_duration):
                 anomaly_log.append((timestamps[st + i], "voltage", "sag"))
 
         if random.random() < self.event_rate:
             # 5. Voltage Surge
-            st = int(frequency.shape[0] * random.random())
-            voltage[st : st + 10] += 0.3  # Voltage surge
-            for i in range(10):
+            st = int((frequency.shape[0] - event_duration) * random.random())
+            voltage[st : st + event_duration] += 0.3  # Voltage surge
+            for i in range(event_duration):
                 anomaly_log.append((timestamps[st + i], "voltage", "surge"))
 
         if random.random() < self.event_rate:
-            st = int(frequency.shape[0] * random.random())
+            st = int((frequency.shape[0] - oscillation_duration) * random.random())
             # 6. Oscillatory Behavior (Simulate damped oscillations in voltage)
             oscillation = (
                 0.05
                 * np.sin(2 * np.pi * 5 * t[st : st + 20])
                 * np.exp(-0.1 * t[st : st + 20])
             )
-            voltage[st : st + 20] += oscillation
-            for i in range(20):
+            voltage[st : st + oscillation_duration] += oscillation
+            for i in range(oscillation_duration):
                 anomaly_log.append(
                     (timestamps[st + i], "voltage", "voltage oscilation")
                 )
 
         if random.random() < self.event_rate:
             # 7. Frequency Oscillation
-            st = int(frequency.shape[0] * random.random())
-            frequency[st : st + 20] += 0.5 * np.sin(
-                2 * np.pi * 10 * t[st : st + 20]
+            st = int((frequency.shape[0] - oscillation_duration) * random.random())
+            frequency[st : st + oscillation_duration] += 0.5 * np.sin(
+                2 * np.pi * 10 * t[st : st + oscillation_duration]
             )  # High-frequency oscillations
-            for i in range(20):
+            for i in range(oscillation_duration):
                 anomaly_log.append((timestamps[st + i], "frequency", "high oscilation"))
 
         if random.random() < self.event_rate:
             # 8. Frequency Oscillation
-            st = int(frequency.shape[0] * random.random())
-            frequency[st : st + 20] += 0.1 * np.sin(
-                2 * np.pi * 0.5 * t[st : st + 20]
+            st = int((frequency.shape[0] - oscillation_duration) * random.random())
+            frequency[st : st + oscillation_duration] += 0.1 * np.sin(
+                2 * np.pi * 0.5 * t[st : st + oscillation_duration]
             )  # low-frequency oscillations
-            for i in range(20):
+            for i in range(oscillation_duration):
                 anomaly_log.append((timestamps[st + i], "frequency", "low oscilation"))
 
         # Introduce random null values (representing communication errors)

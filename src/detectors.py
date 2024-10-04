@@ -21,10 +21,17 @@ class ROCOFDetector:
 
 # Teager-Kaiser Energy Operator (TKEO) Detector
 class TKEODetector:
-    def detect(self, signal: np.ndarray, threshold=0.05) -> np.ndarray:
+    def detect(self, signal: np.ndarray, threshold=95) -> np.ndarray:
         teager = self.teager_kaiser_energy_operator(signal)
-        anomalies = teager > threshold
-        return anomalies
+        upper_threshold_percentile = np.percentile(teager, threshold)
+        lower_threshold_percentile = np.percentile(teager, 100 - threshold)
+
+        upper_index = teager > upper_threshold_percentile
+        lower_index = teager < lower_threshold_percentile
+
+        anomalies_indices = upper_index | lower_index
+
+        return anomalies_indices
 
     @staticmethod
     def teager_kaiser_energy_operator(signal: np.ndarray) -> np.ndarray:
@@ -38,6 +45,8 @@ class ZscoreDetector:
     def detect(
         self, data_frame: pd.DataFrame, feature_list: List[str], threshold=3
     ) -> np.ndarray:
+
         z_scores = np.abs(zscore(data_frame[feature_list], nan_policy="omit"))
         anomalies = (z_scores > threshold).any(axis=1)
+
         return anomalies

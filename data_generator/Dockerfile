@@ -10,8 +10,11 @@ RUN pip install -U pip && \
     pip install pandas psycopg2-binary
 
 COPY data_generator.py data_generator.py
-COPY pmu.py pmu.py
+COPY pmu.csv pmu.csv
+COPY ./docker-entrypoint.sh docker-entrypoint.sh
 
-ENTRYPOINT ["python", "data_generator.py", "--db-host"]
-# Change CMD to solve host finding error
-CMD ["localhost"]
+RUN chmod +x docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/app/docker-entrypoint.sh"]
+
+CMD ["--db-host", "localhost", "--csv-path", "/usr/app/pmu.csv"]

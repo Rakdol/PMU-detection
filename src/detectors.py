@@ -60,34 +60,19 @@ class ZscoreDetector:
 class PcaDetector(object):
     def __init__(self, model_directory: str, model_file_name: str):
         """
-        model structures
-        pca_pipeline = Pipeline(steps=[
-            ("scaler", StandardScaler()),
-            ("ipca", IncrementalPCA(n_components=2))
-        ])
-
-        model_directory (string) : model directory foler name
-        model_file_name (string) : model file name in model directory
+        PCA 모델을 초기화하거나 새롭게 생성하는 클래스
+        model_directory (string): 모델이 저장된 디렉터리 경로
+        model_file_name (string): 모델 파일 이름
         """
         self.model = self._get_pca_model(model_directory, model_file_name)
         self.labels = {0: "Normal", 1: "Abnormal"}
         self.cov_matrix = None
         self.inv_cov_matrix = None
         self.mean_distr = None
-
-    def predict(self, dist: np.ndarray, threshold=3.0, extreme=True) -> np.ndarray:
-        k = threshold if extreme else threshold
-        threshold = np.mean(dist) * k
-        outliers = []
-        for i in range(len(dist)):
-            if dist[i] >= threshold:
-                outliers.append(i)  # index of the outlier
-
-        return np.array(outliers)
-
-    def predict_label(self, dist: np.ndarray, threshold=3.0, extreme=True):
-        predictions = self.predict(dist, threshold, extreme)
-        return np.array([self.labels[prediction] for prediction in predictions])
+        self.prior_mean = None
+        self.prior_var = None
+        self.threshold = 3.0
+        self.update_threshold = 7.0  # 업데이트 여부를 판단할 임계값 설정
 
     def _get_pca_model(self, model_directory: str, model_file_name: str):
         model_file_directory = os.path.join(model_directory, model_file_name)
@@ -96,58 +81,134 @@ class PcaDetector(object):
                 model = load(f)
         except FileNotFoundError as e:
             print(f"Model file cannot be found: {e}")
-            print("Declare New  Model Pipeline")
+            print("Declare New Model Pipeline with Incremental PCA")
+            # Incremental PCA로 새로운 모델을 생성
             model = Pipeline(
                 steps=[
-                    ("scaler", StandardScaler()),
-                    ("ipca", IncrementalPCA(n_components=2)),
+                    ("scaler", StandardScaler()),  # 스케일러로 입력 데이터 표준화
+                    ("ipca", IncrementalPCA(n_components=2)),  # Incremental PCA 사용
                 ]
             )
-
         return model
 
-    def _update(self, x: Union[pd.DataFrame, np.ndarray], scale: bool = False) -> None:
-        if scale:
-            # If the scaler is needed to update its parameters
-            # We call fit function.
-            self.model.named_steps["scaler"].fit(x)
+    def _should_update(self, data: np.ndarray) -> bool:
+        """
+        새로운 데이터가 기존 데이터와 너무 다르면 업데이트를 하지 않음
+        """
 
-        self.model.named_steps["scaler"].transform(x)
-        self.model.named_steps["ipca"].partial_fit(x)
+        if self.inv_cov_matrix is None or self.mean_distr is None:
+            return True  # 모델이 초기화되지 않았으면 업데이트 허용
 
-    def _is_pos_def(self, A: np.ndarray) -> bool:
-        if np.allclose(A, A.T):
-            try:
-                np.linalg.cholesky(A)
-                return True
-            except np.linalg.LinAlgError:
-                return False
-        else:
+        # Step 2: 데이터를 PCA로 변환
+        x_scaled = self.model.named_steps["scaler"].transform(data)
+        x_pca = self.model.named_steps["ipca"].transform(x_scaled)
+
+        mahalanobis_distances = self._calculate_MahalanobisDist(
+            self.inv_cov_matrix, self.mean_distr, x_pca
+        )
+        # 마할라노비스 거리가 임계값을 넘으면 업데이트하지 않음
+        if np.mean(mahalanobis_distances) > self.update_threshold:
+            print(
+                "New data significantly deviates from the existing data. Skipping update."
+            )
             return False
+        return True
+
+    def _update(self, x: Union[pd.DataFrame, np.ndarray], scale: bool = False) -> None:
+        if not self._should_update(x):
+            return  # 업데이트하지 않음
+
+        if scale:
+            # 매번 fit 대신 partial_fit으로 이전 데이터를 유지한 채 업데이트
+            self.model.named_steps["scaler"].partial_fit(x)
+
+        x_scaled = self.model.named_steps["scaler"].transform(x)
+        # Incremental PCA를 통해 점진적으로 학습
+        self.model.named_steps["ipca"].partial_fit(x_scaled)
+
+        # PCA 변환 결과를 얻음
+        x_pca = self.model.named_steps["ipca"].transform(x_scaled)
+
+        # 공분산 행렬 및 평균 벡터 업데이트
+        self.cov_matrix, self.inv_cov_matrix = self._get_cov_matrix(x_pca)
+        self.mean_distr = np.mean(x_pca, axis=0)
 
     def _get_cov_matrix(self, data: Union[pd.DataFrame, np.ndarray]):
         covariance_matrix = np.cov(data, rowvar=False)
-        if self.is_pos_def(covariance_matrix):
-            inv_covariance_matrix = np.linalg.inv(covariance_matrix)
-            if self.is_pos_def(inv_covariance_matrix):
-                return covariance_matrix, inv_covariance_matrix
-            else:
-                print("Error: Inverse of Covariance Matrix is not positive definite!")
-        else:
-            print("Error: Covariance Matrix is not positive definite!")
+        inv_cov_matrix = np.linalg.inv(covariance_matrix)
+        return covariance_matrix, inv_cov_matrix
 
     def _calculate_MahalanobisDist(
         self, inv_cov_matrix: np.ndarray, mean_distr: np.ndarray, data: np.ndarray
     ):
-        inv_covariance_matrix = inv_cov_matrix
-        vars_mean = mean_distr
-        diff = data - vars_mean
+        """
+        PCA로 변환된 데이터와 평균 벡터를 사용하여 마할라노비스 거리 계산
+        """
+        diff = data - mean_distr
         md = []
         for i in range(len(diff)):
-            md.append(np.sqrt(diff[i].dot(inv_covariance_matrix).dot(diff[i])))
-        return md
+            md.append(np.sqrt(diff[i].dot(inv_cov_matrix).dot(diff[i])))
+        return np.array(md)
+
+    def predict(self, dist: np.ndarray, threshold) -> np.ndarray:
+
+        outliers = np.where(dist >= threshold)[0]  # 조건을 만족하는 인덱스 반환
+        return outliers
 
     def _MD_threshold(self, dist: np.ndarray, threshold=3.0, extreme=False):
+        """
+        베이지안 방식으로 임계값을 업데이트하는 함수
+        """
+        # 새로운 데이터의 평균과 분산
+        new_mean = np.mean(dist)
+        new_var = np.var(dist)
+
+        # 이전 평균과 분산이 없는 경우 초기화
+        if self.prior_mean is None or self.prior_var is None:
+            updated_mean = new_mean  # 새로운 데이터의 평균을 업데이트된 값으로 설정
+            updated_var = new_var  # 새로운 데이터의 분산을 업데이트된 값으로 설정
+            self.prior_mean = updated_mean  # 이후 참조를 위해 저장
+            self.prior_var = updated_var  # 이후 참조를 위해 저장
+        else:
+            # 가중치를 적용하여 업데이트 (이전 데이터의 크기를 고려)
+            weight_prior = 0.5  # 이전 평균에 80% 가중치
+            weight_new = 0.5  # 새로운 평균에 20% 가중치
+            updated_mean = (weight_prior * self.prior_mean) + (weight_new * new_mean)
+            updated_var = (weight_prior * self.prior_var) + (weight_new * new_var)
+
+            # 이전 상태 업데이트
+            self.prior_mean = updated_mean
+            self.prior_var = updated_var
+
+        # 업데이트된 임계값 계산
         k = threshold if extreme else threshold - 1
-        threshold = np.mean(dist) * k
-        return threshold
+        dynamic_threshold = updated_mean + k * np.sqrt(updated_var)
+
+        return dynamic_threshold
+
+    def process_and_detect(
+        self, data: Union[pd.DataFrame, np.ndarray], extreme=False
+    ) -> np.ndarray:
+        """
+        새로운 데이터를 처리하고 PCA 모델을 업데이트한 뒤 이상 탐지 수행
+        """
+        # Step 1: PCA 모델 업데이트
+        if self.prior_mean is None or self.prior_var is None:
+            self._update(data, scale=True)
+
+        # Step 2: 데이터를 PCA로 변환
+        x_scaled = self.model.named_steps["scaler"].transform(data)
+        x_pca = self.model.named_steps["ipca"].transform(x_scaled)
+
+        # Step 3: 마할라노비스 거리 계산
+        mahalanobis_distances = self._calculate_MahalanobisDist(
+            self.inv_cov_matrix, self.mean_distr, x_pca  # 변환된 PCA 데이터 사용
+        )
+        self.theshold = self._MD_threshold(
+            mahalanobis_distances, threshold=self.threshold, extreme=extreme
+        )
+        # Step 4: 이상치 탐지
+
+        outliers = self.predict(mahalanobis_distances, self.threshold)
+        self._update(data)
+        return outliers

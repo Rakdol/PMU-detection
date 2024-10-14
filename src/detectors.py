@@ -1,8 +1,12 @@
-from typing import List
+import os
+from typing import List, Union
 import pandas as pd
 import numpy as np
 from scipy.stats import zscore
-from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA, IncrementalPCA
+from sklearn.pipeline import Pipeline
+from pickle import dump, load
 
 
 # Frequency Detector
@@ -53,26 +57,65 @@ class ZscoreDetector:
         return anomalies
 
 
-class PcaAnomalyDetector(object):
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        n_components: int = 2,
-        threshold: int = 3,
-    ):
-        self.k = threshold
-        self.pca = PCA(n_components=n_components, svd_solver="full")
-        self.train = self._initialzie(data)
-        self.mean_distr = self.train.mean(axis=0)
+class PcaDetector(object):
+    def __init__(self, model_directory: str, model_file_name: str):
+        """
+        model structures
+        pca_pipeline = Pipeline(steps=[
+            ("scaler", StandardScaler()),
+            ("ipca", IncrementalPCA(n_components=2))
+        ])
 
-    def _initialzie(self, data):
-        X_train_PCA = self.pca.fit_transform(data)
-        X_train_PCA = pd.DataFrame(X_train_PCA)
-        X_train_PCA.index = data.index
+        model_directory (string) : model directory foler name
+        model_file_name (string) : model file name in model directory
+        """
+        self.model = self._get_pca_model(model_directory, model_file_name)
+        self.labels = {0: "Normal", 1: "Abnormal"}
+        self.cov_matrix = None
+        self.inv_cov_matrix = None
+        self.mean_distr = None
 
-        return X_train_PCA
+    def predict(self, dist: np.ndarray, threshold=3.0, extreme=True) -> np.ndarray:
+        k = threshold if extreme else threshold
+        threshold = np.mean(dist) * k
+        outliers = []
+        for i in range(len(dist)):
+            if dist[i] >= threshold:
+                outliers.append(i)  # index of the outlier
 
-    def _is_pos_def(self, A):
+        return np.array(outliers)
+
+    def predict_label(self, dist: np.ndarray, threshold=3.0, extreme=True):
+        predictions = self.predict(dist, threshold, extreme)
+        return np.array([self.labels[prediction] for prediction in predictions])
+
+    def _get_pca_model(self, model_directory: str, model_file_name: str):
+        model_file_directory = os.path.join(model_directory, model_file_name)
+        try:
+            with open(model_file_directory, "rb") as f:
+                model = load(f)
+        except FileNotFoundError as e:
+            print(f"Model file cannot be found: {e}")
+            print("Declare New  Model Pipeline")
+            model = Pipeline(
+                steps=[
+                    ("scaler", StandardScaler()),
+                    ("ipca", IncrementalPCA(n_components=2)),
+                ]
+            )
+
+        return model
+
+    def _update(self, x: Union[pd.DataFrame, np.ndarray], scale: bool = False) -> None:
+        if scale:
+            # If the scaler is needed to update its parameters
+            # We call fit function.
+            self.model.named_steps["scaler"].fit(x)
+
+        self.model.named_steps["scaler"].transform(x)
+        self.model.named_steps["ipca"].partial_fit(x)
+
+    def _is_pos_def(self, A: np.ndarray) -> bool:
         if np.allclose(A, A.T):
             try:
                 np.linalg.cholesky(A)
@@ -82,30 +125,7 @@ class PcaAnomalyDetector(object):
         else:
             return False
 
-    def MD_threshold(self, dist, extreme=False, verbose=False):
-        k = self.k if extreme else self.k - 1
-        threshold = np.mean(dist) * k
-        return threshold
-
-    def MD_detectOutliers(self, dist, extreme=False, verbose=False):
-        k = self.k if extreme else self.k - 1
-        threshold = np.mean(dist) * k
-        outliers = []
-        for i in range(len(dist)):
-            if dist[i] >= threshold:
-                outliers.append(i)  # index of the outlier
-        return np.array(outliers)
-
-    def MahalanobisDist(self, inv_cov_matrix, mean_distr, data, verbose=False):
-        inv_covariance_matrix = inv_cov_matrix
-        vars_mean = mean_distr
-        diff = data - vars_mean
-        md = []
-        for i in range(len(diff)):
-            md.append(np.sqrt(diff[i].dot(inv_covariance_matrix).dot(diff[i])))
-        return md
-
-    def cov_matrix(self, data, verbose=False):
+    def _get_cov_matrix(self, data: Union[pd.DataFrame, np.ndarray]):
         covariance_matrix = np.cov(data, rowvar=False)
         if self.is_pos_def(covariance_matrix):
             inv_covariance_matrix = np.linalg.inv(covariance_matrix)
@@ -115,3 +135,19 @@ class PcaAnomalyDetector(object):
                 print("Error: Inverse of Covariance Matrix is not positive definite!")
         else:
             print("Error: Covariance Matrix is not positive definite!")
+
+    def _calculate_MahalanobisDist(
+        self, inv_cov_matrix: np.ndarray, mean_distr: np.ndarray, data: np.ndarray
+    ):
+        inv_covariance_matrix = inv_cov_matrix
+        vars_mean = mean_distr
+        diff = data - vars_mean
+        md = []
+        for i in range(len(diff)):
+            md.append(np.sqrt(diff[i].dot(inv_covariance_matrix).dot(diff[i])))
+        return md
+
+    def _MD_threshold(self, dist: np.ndarray, threshold=3.0, extreme=False):
+        k = threshold if extreme else threshold - 1
+        threshold = np.mean(dist) * k
+        return threshold

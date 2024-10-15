@@ -91,6 +91,11 @@ class PcaDetector(object):
             )
         return model
 
+    def save_model(self, model_directory: str, model_file_name: str) -> None:
+        model_file_directory = os.path.join(model_directory, model_file_name)
+        with open(model_file_directory, "wb") as f:
+            dump(self.model, f)
+
     def _should_update(self, data: np.ndarray) -> bool:
         """
         새로운 데이터가 기존 데이터와 너무 다르면 업데이트를 하지 않음
@@ -152,7 +157,10 @@ class PcaDetector(object):
 
     def predict(self, dist: np.ndarray, threshold) -> np.ndarray:
 
-        outliers = np.where(dist >= threshold)[0]  # 조건을 만족하는 인덱스 반환
+        outliers = np.where(
+            dist >= threshold, True, False
+        )  # 조건을 만족하는 인덱스 반환
+
         return outliers
 
     def _MD_threshold(self, dist: np.ndarray, threshold=3.0, extreme=False):
@@ -171,8 +179,8 @@ class PcaDetector(object):
             self.prior_var = updated_var  # 이후 참조를 위해 저장
         else:
             # 가중치를 적용하여 업데이트 (이전 데이터의 크기를 고려)
-            weight_prior = 0.5  # 이전 평균에 80% 가중치
-            weight_new = 0.5  # 새로운 평균에 20% 가중치
+            weight_prior = 0.3  # 이전 평균 가중치
+            weight_new = 0.7  # 새로운 평균 가중치
             updated_mean = (weight_prior * self.prior_mean) + (weight_new * new_mean)
             updated_var = (weight_prior * self.prior_var) + (weight_new * new_var)
 
@@ -187,7 +195,9 @@ class PcaDetector(object):
         return dynamic_threshold
 
     def process_and_detect(
-        self, data: Union[pd.DataFrame, np.ndarray], extreme=False
+        self,
+        data: Union[pd.DataFrame, np.ndarray],
+        extreme=False,
     ) -> np.ndarray:
         """
         새로운 데이터를 처리하고 PCA 모델을 업데이트한 뒤 이상 탐지 수행
@@ -207,8 +217,8 @@ class PcaDetector(object):
         self.theshold = self._MD_threshold(
             mahalanobis_distances, threshold=self.threshold, extreme=extreme
         )
-        # Step 4: 이상치 탐지
 
+        # Step 4: 이상치 탐지
         outliers = self.predict(mahalanobis_distances, self.threshold)
         self._update(data)
         return outliers

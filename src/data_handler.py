@@ -1,6 +1,10 @@
 import numpy as np
 import pandas as pd
 import datetime
+from pathlib import Path
+
+PAKAGE_ROOT = Path(__file__).resolve().parents[1]
+EVENT_PATH = str(PAKAGE_ROOT / "event_logs")
 
 
 def handle_missing_values(missing_data_frame: pd.DataFrame) -> pd.DataFrame:
@@ -36,34 +40,53 @@ def extract_anomaly_windows(
 
 
 def save_event_data(
-    pmu_data: pd.DataFrame, anomalie_indices: np.ndarray, pad_sequence_length=100
+    pmu_data: pd.DataFrame, anomalie_indices: np.ndarray, pad_sequence_length=1000
 ) -> None:
     windows = extract_anomaly_windows(
         anomalie_indices,
         window_size_before=pad_sequence_length,
         window_size_after=pad_sequence_length,
     )
+
+    data_len = len(pmu_data)
+
     for i, window in enumerate(windows):
-        start = window[0]
-        end = window[1]
-        start_time = (
-            pmu_data["timestamp"][start]
-            .replace(" ", "-")
-            .replace(":", "-")
-            .replace(".", "-")
+        # Start와 End 값을 데이터 범위 내로 제한
+        start = max(0, window[0])
+        end = min(window[1], data_len - 1)
+
+        # 시작과 끝의 타임스탬프를 가져와 파일 이름으로 사용
+        start_time = pd.to_datetime(pmu_data["timestamp"].iloc[start]).strftime(
+            "%Y-%m-%d-%H-%M-%S-%f"
         )
-        end_time = (
-            pmu_data["timestamp"][end]
-            .replace(" ", "-")
-            .replace(":", "-")
-            .replace(".", "-")
+        end_time = pd.to_datetime(pmu_data["timestamp"].iloc[end]).strftime(
+            "%Y-%m-%d-%H-%M-%S-%f"
         )
+
+        # start_time = (
+        #     pmu_data["timestamp"][start]
+        #     .replace(" ", "-")
+        #     .replace(":", "-")
+        #     .replace(".", "-")
+        # )
+        # end_time = (
+        #     pmu_data["timestamp"][end]
+        #     .replace(" ", "-")
+        #     .replace(":", "-")
+        #     .replace(".", "-")
+        # )
+
+        # 저장 파일 이름 출력
         print("====== Save Files =======")
-        print(f"../event_log/event_data_{start_time}_{end_time}.csv")
-        saved_data = pmu_data[start:end]
-        saved_data.loc[:, "timestamp"] = pd.to_datetime(saved_data["timestamp"]).apply(
-            lambda x: datetime.datetime.strftime(x, "%Y-%m-%d %H:%M:%S:%f")
+
+        save_directory = EVENT_PATH + f"/event_data_{start_time}_{end_time}.csv"
+        print(save_directory)
+
+        # 데이터 추출
+        saved_data = pmu_data.iloc[start : end + 1]  # end가 포함되도록 +1
+        saved_data["timestamp"] = pd.to_datetime(saved_data["timestamp"]).apply(
+            lambda x: x.strftime("%Y-%m-%d %H:%M:%S.%f")
         )
-        saved_data.to_csv(
-            f"../event_log/event_data_from_{start_time}_to_{end_time}.csv", index=False
-        )
+
+        # 데이터 저장
+        saved_data.to_csv(save_directory, index=False)

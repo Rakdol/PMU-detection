@@ -1,7 +1,10 @@
 import os
 import time
 from datetime import datetime, timedelta
+from collections import deque
 from pathlib import Path
+
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -11,10 +14,13 @@ from PIL import Image
 from src.db.models import PmuData
 from src.db import cruds
 from src.detectors import FrequencyDetector, ROCOFDetector, PcaDetector
-from src.data_handler import save_event_data, handle_missing_values
+from src.data_handler import (
+    handle_missing_values,
+    save_event_time_data,
+)
 
-# PAKAEG_ROOT = Path(__file__).resolve().parents[0]
-PAKAGE_ROOT = "/home/sm/OneDrive/CS/Project/PMU_detection/"
+PAKAGE_ROOT = Path(__file__).resolve().parents[0]
+# PAKAGE_ROOT = "/home/sm/OneDrive/CS/Project/PMU_detection/"
 
 st.set_page_config(
     page_title="PMU Monitoring DashBoard",
@@ -38,6 +44,8 @@ get_style()
 
 model_directory = PAKAGE_ROOT + "artifacts"
 model_file_name = "pca_production.pkl"
+buffer_size = 60 * 60 * 60
+
 
 fr_detector = FrequencyDetector()
 rocof_detector = ROCOFDetector()
@@ -50,7 +58,6 @@ new_image = logo.resize((300, 200))
 
 render_side(logo=new_image, pca_detector=pca_detector)
 
-
 # 실시간 데이터 갱신
 st.title("📊 실시간 주파수 변화 현황")
 # 차트 업데이트를 위한 공간
@@ -58,15 +65,8 @@ chart_placeholder = st.empty()
 metric_placeholder = st.empty()
 anomaly_placeholder = st.empty()
 
-# 모든 시간대와 분을 포함한 기본 데이터프레임 생성
-hours = np.arange(0, 24)
-minutes = np.arange(0, 60)
-default_heatmap = pd.DataFrame(
-    [(h, m) for h in hours for m in minutes], columns=["hour", "minute"]
-)
-
 # # 데이터 스트림 업데이트 루프
-timestep = 0.3
+timestep = 1
 while True:
 
     # 새로운 데이터 가져오기
@@ -80,12 +80,16 @@ while True:
         pd_sql=True,
     )
     handle_missing_values(pmu_data)
+
     pmu_data.index = pd.to_datetime(pmu_data.index) + pd.Timedelta(hours=9)
+
+    # if "last_timestamp" not in st.session_state:
+    last_timestamp = pmu_data.index.min()
 
     # 데이터 축적 (이전 데이터와 병합)
     st.session_state.historical_data = pd.concat(
         [st.session_state.historical_data, pmu_data]
-    )
+    ).tail(buffer_size)
 
     fr_chart = plot_line_chart(
         st.session_state.historical_data.reset_index().tail(60 * 10),
@@ -110,10 +114,9 @@ while True:
     with metric_placeholder.container():
         render_metrics(st.session_state.historical_data.tail(60 * 10).mean())
 
-    anomaly_df = st.session_state.historical_data.tail(60 * 20).reset_index().copy()
+    anomaly_df = pmu_data.copy()
 
     with anomaly_placeholder.container():
-
         # Anomaly 그룹
         st.markdown("### Anomaly Detection")
         st.markdown("---")
@@ -123,9 +126,7 @@ while True:
             anomaly_df["Frequency"], st.session_state.fr_threshold
         )
 
-        pca_anomailes = pca_detector.process_and_detect(
-            anomaly_df.drop(labels=["timestamp"], axis=1), extreme=True
-        )
+        pca_anomailes = pca_detector.process_and_detect(anomaly_df, extreme=True)
 
         anomaly_df["FrAnomaly"] = fr_anomalies
         anomaly_df["PCAAnomaly"] = pca_anomailes
@@ -147,6 +148,7 @@ while True:
         rocof_anomailes = rocof_detector.detect(
             anomaly_df["DeFrequency"], threshold=st.session_state.rocof_threshold
         )
+
         anomaly_df["RoCoFAnomaly"] = rocof_anomailes
 
         rocof_chart = plot_anomaly_chart(
@@ -156,42 +158,27 @@ while True:
             domain=[-0.25, 0.25],
         )
 
+        anomaly_df["TotalAnomalies"] = fr_anomalies | pca_anomailes | rocof_anomailes
         # Streamlit에 차트 출력
         st.altair_chart(rocof_chart, use_container_width=True)
 
-        ##TODO 데이터가 중복저장되는 문제
-        anomalie_indices = fr_anomalies | pca_anomailes | rocof_anomailes
-        save_event_data(anomaly_df, anomalie_indices, pad_sequence_length=1000)
-
         st.markdown("---")
 
-        anomaly_data = pd.DataFrame(
-            {
-                "timestamp": st.session_state.historical_data.tail(60 * 20).index,
-                "fr_anomalies": fr_anomalies,
-                "rocof_anomalies": rocof_anomailes,
-                "pca_anomalies": pca_anomailes,
-            }
-        )
-
+        # 이상 데이터 축적
         st.session_state.daily_detection_data = pd.concat(
-            [st.session_state.daily_detection_data, anomaly_data]
-        )
+            [st.session_state.daily_detection_data, anomaly_df]
+        ).tail(buffer_size)
 
         total_count = len(st.session_state.daily_detection_data)
-        total_anomailes = sum(
-            st.session_state.daily_detection_data.drop("timestamp", axis=1).sum()
-        )
+        total_anomailes = st.session_state.daily_detection_data["TotalAnomalies"].sum()
 
         group_counts = {
             "Normal": total_count - total_anomailes,
-            "FR Anomalies": st.session_state.daily_detection_data["fr_anomalies"].sum(),
+            "FR Anomalies": st.session_state.daily_detection_data["FrAnomaly"].sum(),
             "RoCoF Anomalies": st.session_state.daily_detection_data[
-                "rocof_anomalies"
+                "RoCoFAnomaly"
             ].sum(),
-            "PCA Anomalies": st.session_state.daily_detection_data[
-                "pca_anomalies"
-            ].sum(),
+            "PCA Anomalies": st.session_state.daily_detection_data["PCAAnomaly"].sum(),
         }
 
         global_counts = {
@@ -215,6 +202,7 @@ while True:
         heatmap_chart = plot_heatmap_chart(
             st.session_state.anomaly_heatmap,
             st.session_state.daily_detection_data.copy(),
+            anomaly_columns=["FrAnomaly", "RoCoFAnomaly", "PCAAnomaly"],
         )
 
         a1, a2 = st.columns(2)
@@ -246,6 +234,32 @@ while True:
                 st.altair_chart(group_chart, use_container_width=True)
 
         st.altair_chart(heatmap_chart, use_container_width=True)
+
+    if "last_saved_timestamp" not in st.session_state:
+        st.session_state.last_saved_timestamp = (
+            st.session_state.daily_detection_data.index.min()
+        )
+    # Get the current max timestamp from the index
+    current_timestamp = st.session_state.daily_detection_data.index.max()
+
+    if current_timestamp - st.session_state.last_saved_timestamp >= timedelta(
+        minutes=1
+    ):
+
+        min_time_index = st.session_state.last_saved_timestamp - timedelta(minutes=1)
+        df = st.session_state.daily_detection_data[
+            st.session_state.daily_detection_data.index >= min_time_index
+        ]
+
+        save_event_time_data(
+            df,
+            anomaly_col="TotalAnomalies",
+            delta_type="seconds",
+            delta_time=30,
+        )
+
+        # st.dataframe(x)
+        st.session_state.last_saved_timestamp = current_timestamp
 
     if st.session_state.last_reset_date != datetime.now().date():
         st.session_state.last_reset_date = datetime.now().date()

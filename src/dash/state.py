@@ -39,6 +39,9 @@ def session_state_initialize():
         )
         st.session_state.anomaly_heatmap = anomaly_heatmap
 
+    if "last_reset_hour" not in st.session_state:
+        st.session_state.last_reset_hour = datetime.now().hour
+
     if "last_reset_date" not in st.session_state:
         st.session_state.last_reset_date = datetime.now().date()
 

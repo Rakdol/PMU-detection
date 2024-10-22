@@ -72,6 +72,7 @@ def plot_heatmap_chart(
     anomaly_columns: list[str] = ["fr_anomalies", "rocof_anomalies", "pca_anomalies"],
 ):
 
+    data = data.reset_index()
     data["anomalies"] = data.loc[:, anomaly_columns].sum(axis=1)
     data["minute"] = pd.to_datetime(data["timestamp"]).dt.minute
     data["hour"] = pd.to_datetime(data["timestamp"]).dt.hour

@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 PAKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +39,85 @@ def extract_anomaly_windows(
     return window
 
 
+def extract_window_timedelta(
+    df: pd.DataFrame, anomaly_col: str, delta_type: str, delta_time: int
+) -> list[tuple]:
+
+    window = []
+    indices = df.index[df[anomaly_col]]
+    if "seconds" == delta_type:
+        td = timedelta(seconds=delta_time)
+
+    elif "minutes" == delta_type:
+        td = timedelta(minutes=delta_time)
+
+    else:
+        td = timedelta(seconds=10)
+
+    start = max(
+        df.index.min(),
+        indices[0] - td,
+    )
+
+    end = min(
+        df.index.min(),
+        indices[0] + td,
+    )
+
+    for index in indices[1:]:
+        new_start = max(
+            df.index.min(),
+            index - td,
+        )
+
+        new_end = min(
+            df.index.max(),
+            index + td,
+        )
+        if new_start <= end:
+            end = max(end, new_end)
+        else:
+            window.append((start, end))
+            start = new_start
+            end = new_end
+
+    window.append((start, end))
+    return window
+
+
+def save_event_time_data(
+    event_data: pd.DataFrame, anomaly_col: str, delta_type: str, delta_time: int
+):
+
+    windows = extract_window_timedelta(
+        df=event_data,
+        anomaly_col=anomaly_col,
+        delta_type=delta_type,
+        delta_time=delta_time,
+    )
+
+    max_time = event_data.index.max()
+
+    for i, window in enumerate(windows):
+        start = max(event_data.index.min(), window[0])
+        end = min(window[1], max_time)
+
+        start_time = start.strftime("%Y-%m-%d-%H-%M-%S-%f")
+        end_time = end.strftime("%Y-%m-%d-%H-%M-%S-%f")
+        # 저장 파일 이름 출력
+        print("====== Save Files =======")
+
+        save_directory = EVENT_PATH + f"/event_data_{start_time}_{end_time}.csv"
+        print(save_directory)
+
+        # 데이터 추출
+        saved_data = event_data.loc[start:end]
+        saved_data = saved_data[~saved_data.index.duplicated(keep="first")]
+
+        # 데이터 저장
+        saved_data.to_csv(save_directory, index=True)
+
+
 def save_event_data(
     pmu_data: pd.DataFrame, anomalie_indices: np.ndarray, pad_sequence_length=1000
 ) -> None:
@@ -62,20 +141,6 @@ def save_event_data(
         end_time = pd.to_datetime(pmu_data["timestamp"].iloc[end]).strftime(
             "%Y-%m-%d-%H-%M-%S-%f"
         )
-
-        # start_time = (
-        #     pmu_data["timestamp"][start]
-        #     .replace(" ", "-")
-        #     .replace(":", "-")
-        #     .replace(".", "-")
-        # )
-        # end_time = (
-        #     pmu_data["timestamp"][end]
-        #     .replace(" ", "-")
-        #     .replace(":", "-")
-        #     .replace(".", "-")
-        # )
-
         # 저장 파일 이름 출력
         print("====== Save Files =======")
 
@@ -83,7 +148,7 @@ def save_event_data(
         print(save_directory)
 
         # 데이터 추출
-        saved_data = pmu_data.iloc[start : end + 1]  # end가 포함되도록 +1
+        saved_data = pmu_data.loc[start : end + 1]  # end가 포함되도록 +1
         saved_data["timestamp"] = pd.to_datetime(saved_data["timestamp"]).apply(
             lambda x: x.strftime("%Y-%m-%d %H:%M:%S.%f")
         )

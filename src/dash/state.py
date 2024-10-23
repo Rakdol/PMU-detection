@@ -45,6 +45,12 @@ def session_state_initialize():
     if "last_reset_date" not in st.session_state:
         st.session_state.last_reset_date = datetime.now().date()
 
+    if "last_saved_timestamp" not in st.session_state:
+        st.session_state.last_saved_timestamp = None
+
+    if "delta_time" not in st.session_state:
+        st.session_state.delta_time = 30
+
 
 def reset_anomaly_heatmap():
     hours = np.arange(0, 24)

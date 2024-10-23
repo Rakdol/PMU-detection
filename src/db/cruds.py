@@ -11,15 +11,15 @@ from src.db.models import PmuData
 from src.utils import log_execution_time
 
 
-logger = getLogger(__name__)
+# logger = getLogger(__name__)
 
 
-@log_execution_time
+# @log_execution_time
 def get_data_count(db: Session) -> int:
     return db.query(PmuData).count()
 
 
-@log_execution_time
+# @log_execution_time
 def select_pmu_from_btw_time(
     db: Session,
     start_time: str,
@@ -49,7 +49,7 @@ def select_pmu_from_btw_time(
     return query.all()  # 리스트 반환 (ORM 객체)
 
 
-@log_execution_time
+# @log_execution_time
 def select_pmu_by_key(db: Session, key: str, limit=500) -> List[PmuData]:
     if limit is not None:
         return db.query(PmuData).filter(PmuData.key == key).limit(limit).all()

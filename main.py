@@ -11,16 +11,13 @@ import pandas as pd
 import altair as alt
 from PIL import Image
 
-from src.db.models import PmuData
 from src.db import cruds
+from src.configurations import Monitoring, Model
 from src.detectors import FrequencyDetector, ROCOFDetector, PcaDetector
 from src.data_handler import (
     handle_missing_values,
     save_event_time_data,
 )
-
-PAKAGE_ROOT = Path(__file__).resolve().parents[0]
-# PAKAGE_ROOT = "/home/sm/OneDrive/CS/Project/PMU_detection/"
 
 st.set_page_config(
     page_title="PMU Monitoring DashBoard",
@@ -42,9 +39,9 @@ from src.dash.side import render_side
 session_state_initialize()  # initialize session state
 get_style()
 
-model_directory = PAKAGE_ROOT + "artifacts"
-model_file_name = "pca_production.pkl"
-buffer_size = 60 * 60 * 60
+model_directory = Model.model_directory
+model_file_name = Model.model_file_name
+buffer_size = Monitoring.buffer_size
 
 
 fr_detector = FrequencyDetector()
@@ -66,11 +63,14 @@ metric_placeholder = st.empty()
 anomaly_placeholder = st.empty()
 
 # # 데이터 스트림 업데이트 루프
-timestep = 1
+timestep = Monitoring.update_step_seconds
+KST = Monitoring.KST
+plot_line_size = Monitoring.plot_line_size
+save_periods_minutes = Monitoring.save_periods_minutes
 while True:
 
     # 새로운 데이터 가져오기
-    end_time = datetime.now() - timedelta(hours=9)
+    end_time = datetime.now() - timedelta(hours=KST)
     start_time = end_time - timedelta(seconds=timestep)
 
     pmu_data = cruds.select_pmu_from_btw_time(
@@ -81,7 +81,7 @@ while True:
     )
     handle_missing_values(pmu_data)
 
-    pmu_data.index = pd.to_datetime(pmu_data.index) + pd.Timedelta(hours=9)
+    pmu_data.index = pd.to_datetime(pmu_data.index) + pd.Timedelta(hours=KST)
 
     # if "last_timestamp" not in st.session_state:
     last_timestamp = pmu_data.index.min()
@@ -92,14 +92,14 @@ while True:
     ).tail(buffer_size)
 
     fr_chart = plot_line_chart(
-        st.session_state.historical_data.reset_index().tail(60 * 10),
+        st.session_state.historical_data.reset_index().tail(plot_line_size),
         x="timestamp",
         y="Frequency",
         domain=[59.8, 60.2],
     )
 
     rocof_chart = plot_line_chart(
-        st.session_state.historical_data.reset_index().tail(60 * 10),
+        st.session_state.historical_data.reset_index().tail(plot_line_size),
         x="timestamp",
         y="DeFrequency",
         domain=[-0.25, 0.25],
@@ -112,7 +112,7 @@ while True:
         st.markdown("---")
 
     with metric_placeholder.container():
-        render_metrics(st.session_state.historical_data.tail(60 * 10).mean())
+        render_metrics(st.session_state.historical_data.tail(plot_line_size).mean())
 
     anomaly_df = pmu_data.copy()
 
@@ -235,38 +235,58 @@ while True:
 
         st.altair_chart(heatmap_chart, use_container_width=True)
 
-    if "last_saved_timestamp" not in st.session_state:
+    if st.session_state.last_saved_timestamp is None:
         st.session_state.last_saved_timestamp = (
             st.session_state.daily_detection_data.index.min()
         )
+
     # Get the current max timestamp from the index
     current_timestamp = st.session_state.daily_detection_data.index.max()
 
     if current_timestamp - st.session_state.last_saved_timestamp >= timedelta(
-        minutes=1
+        minutes=save_periods_minutes
     ):
 
-        min_time_index = st.session_state.last_saved_timestamp - timedelta(minutes=1)
         df = st.session_state.daily_detection_data[
-            st.session_state.daily_detection_data.index >= min_time_index
+            (st.session_state.daily_detection_data.index < current_timestamp)
+            & (
+                st.session_state.daily_detection_data.index
+                >= st.session_state.last_saved_timestamp
+            )
         ]
+
+        # print(
+        #     "st.session_state.daily_detection_data.index.min(): ",
+        #     st.session_state.daily_detection_data.index.min(),
+        # )
+        # print("---------------------------------------------------------------------")
+        # print("last_saved_timestamp: ", st.session_state.last_saved_timestamp)
+        # print("---------------------------------------------------------------------")
+        # print("current_timestamp: ", current_timestamp)
+        # print("---------------------------------------------------------------------")
+        # print("df time min-max: ", df.index.min(), df.index.max())
+        # print("---------------------------------------------------------------------")
 
         save_event_time_data(
             df,
             anomaly_col="TotalAnomalies",
             delta_type="seconds",
-            delta_time=30,
+            delta_time=st.session_state.delta_time,
         )
 
-        # st.dataframe(x)
         st.session_state.last_saved_timestamp = current_timestamp
 
-    if st.session_state.last_reset_date != datetime.now().date():
-        st.session_state.last_reset_date = datetime.now().date()
-        st.session_state.anomaly_heatmap = reset_anomaly_heatmap()
+    if st.session_state.last_reset_hour != datetime.now().hour:
+        st.session_state.last_reset_hour = datetime.now().hour
 
         st.session_state.daily_detection_data = pd.DataFrame()
         st.session_state.historical_data = pd.DataFrame()
         st.session_state.previous_data = {}
+        st.session_state.last_saved_timestamp = None
+
+    if st.session_state.last_reset_date != datetime.now().date():
+        st.session_state.last_reset_date = datetime.now().date()
+
+        st.session_state.anomaly_heatmap = reset_anomaly_heatmap()
 
     time.sleep(timestep)

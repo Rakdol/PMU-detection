@@ -1,23 +1,21 @@
 import os
 import time
 from datetime import datetime, timedelta
-from collections import deque
-from pathlib import Path
-
-
+from logging import getLogger
 import streamlit as st
-import numpy as np
 import pandas as pd
-import altair as alt
 from PIL import Image
 
 from src.db import cruds
 from src.configurations import Monitoring, Model
 from src.detectors import FrequencyDetector, ROCOFDetector, PcaDetector
+
 from src.data_handler import (
     handle_missing_values,
     save_event_time_data,
 )
+
+logger = getLogger(__name__)
 
 st.set_page_config(
     page_title="PMU Monitoring DashBoard",
@@ -27,7 +25,7 @@ st.set_page_config(
 )
 
 from src.dash.state import session_state_initialize, reset_anomaly_heatmap
-from src.dash.metrics import render_metrics, get_style
+from src.dash.metrics import render_metrics, get_style, create_anomaly_metric
 from src.dash.chart import (
     plot_line_chart,
     plot_pie_chart,
@@ -39,10 +37,10 @@ from src.dash.side import render_side
 session_state_initialize()  # initialize session state
 get_style()
 
+
 model_directory = Model.model_directory
 model_file_name = Model.model_file_name
 buffer_size = Monitoring.buffer_size
-
 
 fr_detector = FrequencyDetector()
 rocof_detector = ROCOFDetector()
@@ -67,24 +65,31 @@ timestep = Monitoring.update_step_seconds
 KST = Monitoring.KST
 plot_line_size = Monitoring.plot_line_size
 save_periods_minutes = Monitoring.save_periods_minutes
+end_time = end_time = datetime.now() - timedelta(hours=KST)
+start_time = end_time - timedelta(seconds=timestep)
+
 while True:
-
-    # 새로운 데이터 가져오기
-    end_time = datetime.now() - timedelta(hours=KST)
-    start_time = end_time - timedelta(seconds=timestep)
-
     pmu_data = cruds.select_pmu_from_btw_time(
         st.session_state.db_session,
-        start_time=start_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-        end_time=end_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+        start_time=start_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
+        end_time=end_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
         pd_sql=True,
     )
-    handle_missing_values(pmu_data)
 
-    pmu_data.index = pd.to_datetime(pmu_data.index) + pd.Timedelta(hours=KST)
+    if pmu_data is None:
+        st.error(f"데이터베이스 쿼리 실패: {str(e)}")
+        logger.error(f"데이터베이스 쿼리 실패: {str(e)}")
+        continue  # 오류 발생 시 루프를 계속 진행
 
-    # if "last_timestamp" not in st.session_state:
-    last_timestamp = pmu_data.index.min()
+    start_time = end_time
+    end_time = start_time + timedelta(seconds=timestep)
+    try:
+        handle_missing_values(pmu_data)
+        pmu_data.index = pd.to_datetime(pmu_data.index) + pd.Timedelta(hours=9)
+    except Exception as e:
+        st.error(f"데이터 처리 중 오류 발생: {str(e)}")
+        logger.error(f"데이터 처리 중 오류 발생: {str(e)}")
+        continue  # 오류 발생 시 루프를 계속 진행
 
     # 데이터 축적 (이전 데이터와 병합)
     st.session_state.historical_data = pd.concat(
@@ -122,13 +127,14 @@ while True:
         st.markdown("---")
 
         st.markdown("#### Frequency & PCA Detector")
+
         fr_anomalies = fr_detector.detect(
             anomaly_df["Frequency"], st.session_state.fr_threshold
         )
 
-        pca_anomailes = pca_detector.process_and_detect(anomaly_df, extreme=True)
-
         anomaly_df["FrAnomaly"] = fr_anomalies
+
+        pca_anomailes = pca_detector.process_and_detect(pmu_data.copy(), extreme=True)
         anomaly_df["PCAAnomaly"] = pca_anomailes
 
         fr_chart = plot_anomaly_chart(
@@ -143,7 +149,7 @@ while True:
 
         st.markdown("---")
         st.markdown("#### RoCof Detection")
-        st.write(f"rocof threhold: {st.session_state.rocof_threshold}")
+        # st.write(f"rocof threhold: {st.session_state.rocof_threshold}")
 
         rocof_anomailes = rocof_detector.detect(
             anomaly_df["DeFrequency"], threshold=st.session_state.rocof_threshold
@@ -159,6 +165,7 @@ while True:
         )
 
         anomaly_df["TotalAnomalies"] = fr_anomalies | pca_anomailes | rocof_anomailes
+
         # Streamlit에 차트 출력
         st.altair_chart(rocof_chart, use_container_width=True)
 
@@ -172,6 +179,7 @@ while True:
         total_count = len(st.session_state.daily_detection_data)
         total_anomailes = st.session_state.daily_detection_data["TotalAnomalies"].sum()
 
+        # 파이차트 데이터 생성
         group_counts = {
             "Normal": total_count - total_anomailes,
             "FR Anomalies": st.session_state.daily_detection_data["FrAnomaly"].sum(),
@@ -209,20 +217,38 @@ while True:
         with a1:
             m1, m2, m3 = st.columns(3)
             with m1:
-                st.metric(
+                create_anomaly_metric(
                     "Current Data Points",
                     st.session_state.daily_detection_data.shape[0],
                 )
-                st.metric("FR Anomalies", group_counts["FR Anomalies"])
+                create_anomaly_metric(
+                    "FR Anomalies",
+                    group_counts["FR Anomalies"],
+                )
+
             with m2:
-                st.metric("Current No. Anomalies", total_anomailes)
-                st.metric("RoCoF Anomalies", group_counts["RoCoF Anomalies"])
+
+                create_anomaly_metric(
+                    "Current No. Anomalies",
+                    total_anomailes,
+                )
+
+                create_anomaly_metric(
+                    "RoCoF Anomalies",
+                    group_counts["RoCoF Anomalies"],
+                )
+
             with m3:
-                st.metric(
+
+                create_anomaly_metric(
                     "Anomaly Percentage",
                     f"{(total_anomailes / st.session_state.daily_detection_data.shape[0]) * 100:.2f}%",
                 )
-                st.metric("PCA Anomalies", group_counts["PCA Anomalies"])
+
+                create_anomaly_metric(
+                    "PCA Anomalies",
+                    group_counts["PCA Anomalies"],
+                )
 
         with a2:
             p1, p2 = st.columns(2)
@@ -255,24 +281,16 @@ while True:
             )
         ]
 
-        # print(
-        #     "st.session_state.daily_detection_data.index.min(): ",
-        #     st.session_state.daily_detection_data.index.min(),
-        # )
-        # print("---------------------------------------------------------------------")
-        # print("last_saved_timestamp: ", st.session_state.last_saved_timestamp)
-        # print("---------------------------------------------------------------------")
-        # print("current_timestamp: ", current_timestamp)
-        # print("---------------------------------------------------------------------")
-        # print("df time min-max: ", df.index.min(), df.index.max())
-        # print("---------------------------------------------------------------------")
-
-        save_event_time_data(
-            df,
-            anomaly_col="TotalAnomalies",
-            delta_type="seconds",
-            delta_time=st.session_state.delta_time,
-        )
+        try:
+            save_event_time_data(
+                df,
+                anomaly_col="TotalAnomalies",
+                delta_type="seconds",
+                delta_time=st.session_state.delta_time,
+            )
+        except Exception as e:
+            st.error(f"이벤트 데이터 저장 실패: {str(e)}")
+            logger.error(f"이벤트 데이터 저장 실패: {str(e)}")
 
         st.session_state.last_saved_timestamp = current_timestamp
 

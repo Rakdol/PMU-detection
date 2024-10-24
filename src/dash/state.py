@@ -5,6 +5,9 @@ import numpy as np
 
 from src.db.initialize import initialize_pmu_table
 from src.db.database import pdc_engine, SessionPDC
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 
 def session_state_initialize():

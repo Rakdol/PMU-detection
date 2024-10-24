@@ -44,6 +44,12 @@ def render_side(logo, pca_detector):
                 model_directory=model_directory, model_file_name=file_name
             )
 
+        if st.button("Load pca Model"):
+            file_name = f"pca_production.pkl"
+            pca_detector.load_model(
+                model_directory=model_directory, model_file_name=file_name
+            )
+
     with st.sidebar.expander("About the App"):
         st.markdown(
             """

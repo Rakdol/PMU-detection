@@ -2,7 +2,7 @@ import os
 import json
 from pathlib import Path
 
-path = str(Path(__file__).resolve().parents[0] / "secret.json")
+path = str(Path(__file__).resolve().parents[1] / "secret.json")
 
 with open(path, "r") as f:
     secret = json.load(f)

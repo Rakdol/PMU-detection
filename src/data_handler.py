@@ -1,7 +1,14 @@
+from io import BytesIO
+from datetime import timedelta
+from pathlib import Path
+from logging import getLogger
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
-from pathlib import Path
+
+
+from src.bucket import client, bucket_name
+
+logger = getLogger(__name__)
 
 PAKAGE_ROOT = Path(__file__).resolve().parents[1]
 EVENT_PATH = str(PAKAGE_ROOT / "event_logs")
@@ -44,7 +51,8 @@ def extract_window_timedelta(
 ) -> list[tuple]:
 
     window = []
-    indices = df.index[df[anomaly_col]]
+    indices = df.index[df[anomaly_col] > 0]
+
     if "seconds" == delta_type:
         td = timedelta(seconds=delta_time)
 
@@ -60,7 +68,7 @@ def extract_window_timedelta(
     )
 
     end = min(
-        df.index.min(),
+        df.index.max(),
         indices[0] + td,
     )
 
@@ -77,6 +85,7 @@ def extract_window_timedelta(
         if new_start <= end:
             end = max(end, new_end)
         else:
+            print(start, end)
             window.append((start, end))
             start = new_start
             end = new_end
@@ -105,17 +114,21 @@ def save_event_time_data(
         start_time = start.strftime("%Y-%m-%d-%H-%M-%S-%f")
         end_time = end.strftime("%Y-%m-%d-%H-%M-%S-%f")
         # 저장 파일 이름 출력
-        print("====== Save Files =======")
-
+        logger.info("====== Save Files =======")
         save_directory = EVENT_PATH + f"/event_data_{start_time}_{end_time}.csv"
-        print(save_directory)
-
+        logger.info(save_directory)
         # 데이터 추출
         saved_data = event_data.loc[start:end]
         saved_data = saved_data[~saved_data.index.duplicated(keep="first")]
+        csv = saved_data.to_csv().encode("utf-8")
+
+        # csv to bytes, upload minio
+        result = client.put_object(
+            bucket_name, save_directory, BytesIO(csv), len(saved_data)
+        )
+        logger.info(f"data upload to MinIO - {result}")
 
         # 데이터 저장
-        saved_data.to_csv(save_directory, index=True)
 
 
 def save_event_data(

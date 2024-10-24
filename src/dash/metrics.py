@@ -153,6 +153,19 @@ def create_metric(label, value, delta=None):
     st.markdown(metric_html, unsafe_allow_html=True)
 
 
+def create_anomaly_metric(label, value):
+    metric_html = f"""
+    <div class="metric-box">
+        <div class="label">{label}</div>
+        <div class="value-container">
+            <div class="value">{value}</div>
+        </div>
+        """
+    metric_html += "</div>"
+
+    st.markdown(metric_html, unsafe_allow_html=True)
+
+
 def render_metrics(current_data):
 
     # Frequency와 DeFrequency 그룹

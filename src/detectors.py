@@ -4,9 +4,10 @@ import pandas as pd
 import numpy as np
 from scipy.stats import zscore
 from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA, IncrementalPCA
+from sklearn.decomposition import IncrementalPCA
 from sklearn.pipeline import Pipeline
 from pickle import dump, load
+from src.utils import logger
 
 
 # Frequency Detector
@@ -72,7 +73,7 @@ class PcaDetector(object):
         self.prior_mean = None
         self.prior_var = None
         self.threshold = 3.0
-        self.update_threshold = 7.0  # 업데이트 여부를 판단할 임계값 설정
+        self.update_threshold = 5.0  # 업데이트 여부를 판단할 임계값 설정
 
     def _get_pca_model(self, model_directory: str, model_file_name: str):
         model_file_directory = os.path.join(model_directory, model_file_name)
@@ -80,8 +81,8 @@ class PcaDetector(object):
             with open(model_file_directory, "rb") as f:
                 model = load(f)
         except FileNotFoundError as e:
-            print(f"Model file cannot be found: {e}")
-            print("Declare New Model Pipeline with Incremental PCA")
+            logger.info(f"Model file cannot be found: {e}")
+            logger.info("Declare New Model Pipeline with Incremental PCA")
             # Incremental PCA로 새로운 모델을 생성
             model = Pipeline(
                 steps=[
@@ -95,6 +96,17 @@ class PcaDetector(object):
         model_file_directory = os.path.join(model_directory, model_file_name)
         with open(model_file_directory, "wb") as f:
             dump(self.model, f)
+
+    def load_model(self, model_directory: str, model_file_name: str) -> None:
+        model_file_directory = os.path.join(model_directory, model_file_name)
+        try:
+
+            with open(model_file_directory, "rb") as f:
+                model = load(f)
+        except FileNotFoundError as e:
+            print(f"Model file cannot be found: {e}")
+
+        self.model = model
 
     def _should_update(self, data: np.ndarray) -> bool:
         """
@@ -119,7 +131,7 @@ class PcaDetector(object):
             return False
         return True
 
-    def _update(self, x: Union[pd.DataFrame, np.ndarray], scale: bool = False) -> None:
+    def update(self, x: Union[pd.DataFrame, np.ndarray], scale: bool = False) -> None:
         if not self._should_update(x):
             return  # 업데이트하지 않음
 
@@ -179,8 +191,8 @@ class PcaDetector(object):
             self.prior_var = updated_var  # 이후 참조를 위해 저장
         else:
             # 가중치를 적용하여 업데이트 (이전 데이터의 크기를 고려)
-            weight_prior = 0.3  # 이전 평균 가중치
-            weight_new = 0.7  # 새로운 평균 가중치
+            weight_prior = 0.5  # 이전 평균 가중치
+            weight_new = 0.5  # 새로운 평균 가중치
             updated_mean = (weight_prior * self.prior_mean) + (weight_new * new_mean)
             updated_var = (weight_prior * self.prior_var) + (weight_new * new_var)
 
@@ -204,7 +216,7 @@ class PcaDetector(object):
         """
         # Step 1: PCA 모델 업데이트
         if self.prior_mean is None or self.prior_var is None:
-            self._update(data, scale=True)
+            self.update(data, scale=True)
 
         # Step 2: 데이터를 PCA로 변환
         x_scaled = self.model.named_steps["scaler"].transform(data)
@@ -220,5 +232,5 @@ class PcaDetector(object):
 
         # Step 4: 이상치 탐지
         outliers = self.predict(mahalanobis_distances, self.threshold)
-        self._update(data)
+        self.update(data)
         return outliers

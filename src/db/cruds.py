@@ -8,18 +8,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
 from src.db.models import PmuData
-from src.utils import log_execution_time
+from src.utils import logger
 
 
-# logger = getLogger(__name__)
-
-
-# @log_execution_time
 def get_data_count(db: Session) -> int:
     return db.query(PmuData).count()
 
 
-# @log_execution_time
 def select_pmu_from_btw_time(
     db: Session,
     start_time: str,
@@ -43,8 +38,12 @@ def select_pmu_from_btw_time(
 
         # Pandas DataFrame으로 변환
         df = pd.DataFrame(data)
-
-        return df.pivot(index="timestamp", columns="key", values="value")
+        try:
+            pivot = df.pivot(index="timestamp", columns="key", values="value")
+            return pivot
+        except KeyError as e:
+            logger.info(f" Data Base not retrived {e}")
+            return
 
     return query.all()  # 리스트 반환 (ORM 객체)
 
@@ -54,19 +53,3 @@ def select_pmu_by_key(db: Session, key: str, limit=500) -> List[PmuData]:
     if limit is not None:
         return db.query(PmuData).filter(PmuData.key == key).limit(limit).all()
     return db.query(PmuData).filter(PmuData.key == key).all()
-
-
-# if __name__ == "__main__":
-#     session = Session_PDC()
-#     data = session.query(PmuData).first()
-#     start_time = datetime.now() - timedelta(hours=9)
-#     end_time = start_time - timedelta(seconds=1)
-
-#     data = select_pmu_from_btw_time(
-#         db=Session_PDC(),
-#         start_time=end_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-#         end_time=start_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-#     )
-
-#     for d in data:
-#         print(d.key, ": ", d.value)

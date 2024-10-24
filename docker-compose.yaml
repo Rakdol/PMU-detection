@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  pmu-detection-service:
+    build: .
+    container_name: pmu-detection
+    volumes:
+      - ./src:/pmu_detection/src  # 호스트의 src 디렉토리를 컨테이너의 src 디렉토리에 마운트
+      - ./logs:/pmu_detection/logs  # 호스트의 ./logs 디렉토리를 컨테이너의 logs 폴더에 마운트
+      - ./event_logs:/pmu_detection/event_logs
+      - ./artifacts:/pmu_detection/artifacts
+
+    ports:
+      - "8501:8501"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"  # 로그 파일 크기 제한
+        max-file: "3"    # 최대 3개의 로그 파일 유지
